@@ -1,0 +1,64 @@
+﻿{
+  "thingsboard": {
+    "host": "18.134.221.206",
+    "port": 1883,
+    "remoteShell": false,
+    "remoteConfiguration": true,
+    "latencyDebugMode": false,
+    "statistics": {
+      "enable": true,
+      "statsSendPeriodInSeconds": 60,
+      "customStatsSendPeriodInSeconds": 3600
+    },
+    "deviceFiltering": {
+      "enable": false,
+      "filterFile": "list.json"
+    },
+    "maxPayloadSizeBytes": 8196,
+    "minPackSendDelayMS": 50,
+    "minPackSizeToSend": 500,
+    "checkConnectorsConfigurationInSeconds": 60,
+    "handleDeviceRenaming": true,
+    "security": {
+      "type": "accessToken",
+      "accessToken": "UNIQ_GATEWAY_TOKEN"
+    },
+    "qos": 1,
+    "reportStrategy": {
+      "type": "ON_RECEIVED"
+    },
+    "checkingDeviceActivity": {
+      "checkDeviceInactivity": false,
+      "inactivityTimeoutSeconds": 300,
+      "inactivityCheckPeriodSeconds": 10
+    }
+  },
+  "storage": {
+    "type": "file",
+    "data_folder_path": "./data/",
+    "max_file_count": 10,
+    "max_read_records_count": 100,
+    "max_records_per_file": 10000,
+    "data_file_path": "./data/",
+    "messages_ttl_check_in_hours": 1,
+    "messages_ttl_in_days": 7
+  },
+  "grpc": {
+    "enabled": false,
+    "serverPort": 9595
+  },
+  "connectors": [
+    {
+      "name": "UNIQ Zigbee Connector",
+      "type": "custom",
+      "class": "thingsboard_gateway.extensions.uniq.UniqZigbeeConnector",
+      "configuration": "uniq_zigbee.json"
+    },
+    {
+      "name": "UNIQ Matter Connector",
+      "type": "custom",
+      "class": "thingsboard_gateway.extensions.uniq.UniqMatterConnector",
+      "configuration": "uniq_matter.json"
+    }
+  ]
+}

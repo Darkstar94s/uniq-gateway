@@ -1,0 +1,7 @@
+﻿{
+  "id": "uniq_matter_connector",
+  "name": "UNIQ Matter Connector",
+  "server_url": "ws://127.0.0.1:5580/ws",
+  "fabric_id": 1,
+  "storage_path": "/var/lib/uniq-gateway/matter"
+}

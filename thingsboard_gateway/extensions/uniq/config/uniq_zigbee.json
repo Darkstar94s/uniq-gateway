@@ -1,0 +1,8 @@
+﻿{
+  "id": "uniq_zigbee_connector",
+  "name": "UNIQ Zigbee Connector",
+  "broker_host": "127.0.0.1",
+  "broker_port": 1883,
+  "base_topic": "zigbee2mqtt",
+  "permit_join_default_sec": 120
+}
