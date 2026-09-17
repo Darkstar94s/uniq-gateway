@@ -1,19 +1,25 @@
 # -*- coding: utf-8 -*-
 # Copyright 2026 UNIQ Smart Home
-# Local HTTP Commissioning Microservice for UNIQ Hub
+# Local HTTP Commissioning Microservice & Web Dashboard Server for UNIQ Hub
 
 import json
 import logging
+import os
 import threading
 from http.server import HTTPServer, BaseHTTPRequestHandler
 from typing import Any, Optional
 
+from .hub_auth import HubAuthManager
+
 log = logging.getLogger("UniqMatterCommissionService")
+
+WEB_DIR = os.path.join(os.path.dirname(os.path.abspath(__file__)), "web")
+INDEX_HTML_PATH = os.path.join(WEB_DIR, "index.html")
 
 
 class CommissionRequestHandler(BaseHTTPRequestHandler):
     """
-    Handles local Hub commissioning requests from UNIQ mobile app or installer tools.
+    Handles local Hub web dashboard, authentication, device control, and commissioning.
     """
 
     def log_message(self, format, *args):
@@ -31,6 +37,20 @@ class CommissionRequestHandler(BaseHTTPRequestHandler):
         self.end_headers()
         self.wfile.write(response_bytes)
 
+    def _send_html_response(self, html_content: str):
+        response_bytes = html_content.encode("utf-8")
+        self.send_response(200)
+        self.send_header("Content-Type", "text/html; charset=utf-8")
+        self.send_header("Content-Length", str(len(response_bytes)))
+        self.end_headers()
+        self.wfile.write(response_bytes)
+
+    def _get_auth_token(self) -> Optional[str]:
+        auth_hdr = self.headers.get("Authorization", "")
+        if auth_hdr.startswith("Bearer "):
+            return auth_hdr.replace("Bearer ", "").strip()
+        return None
+
     def do_OPTIONS(self):
         self.send_response(204)
         self.send_header("Access-Control-Allow-Origin", "*")
@@ -39,27 +59,94 @@ class CommissionRequestHandler(BaseHTTPRequestHandler):
         self.end_headers()
 
     def do_GET(self):
-        if self.path in ["/matter/status", "/status"]:
-            service = self.server.service  # type: ignore
+        service = self.server.service  # type: ignore
+
+        # 1. Web Dashboard (Home Page)
+        if self.path in ["/", "/index.html"]:
+            if os.path.exists(INDEX_HTML_PATH):
+                with open(INDEX_HTML_PATH, "r", encoding="utf-8") as f:
+                    self._send_html_response(f.read())
+            else:
+                self._send_html_response("<h1>UNIQ Smart Hub Web UI</h1><p>Dashboard template not found.</p>")
+            return
+
+        # 2. System Status API
+        elif self.path in ["/matter/status", "/status", "/api/status"]:
             status_data = service.get_status()
             self._send_json_response(200, status_data)
+            return
+
+        # 3. Live Devices API (Protected)
+        elif self.path in ["/api/devices"]:
+            token = self._get_auth_token()
+            if not service.auth_manager.validate_token(token):
+                self._send_json_response(401, {"error": "Unauthorized. Please login with valid Hub PIN."})
+                return
+
+            devices_data = service.get_live_devices()
+            self._send_json_response(200, {"devices": devices_data})
+            return
+
         else:
             self._send_json_response(404, {"error": "Not Found", "path": self.path})
 
     def do_POST(self):
-        if self.path in ["/matter/commission", "/commission"]:
-            content_length = int(self.headers.get("Content-Length", 0))
-            if content_length <= 0:
-                self._send_json_response(400, {"status": "error", "error": "Empty request body"})
+        service = self.server.service  # type: ignore
+        content_length = int(self.headers.get("Content-Length", 0))
+        if content_length <= 0:
+            self._send_json_response(400, {"status": "error", "error": "Empty request body"})
+            return
+
+        try:
+            post_body = self.rfile.read(content_length)
+            req_data = json.loads(post_body.decode("utf-8"))
+        except Exception as e:
+            self._send_json_response(400, {"status": "error", "error": f"Invalid JSON body: {e}"})
+            return
+
+        # 1. Admin PIN Login
+        if self.path == "/api/login":
+            pin = req_data.get("pin", "")
+            token = service.auth_manager.verify_pin(pin)
+            if token:
+                self._send_json_response(200, {"success": True, "token": token})
+            else:
+                self._send_json_response(401, {"success": False, "error": "Invalid PIN"})
+            return
+
+        # 2. Local Device RPC Control
+        elif self.path == "/api/control":
+            token = self._get_auth_token()
+            if not service.auth_manager.validate_token(token):
+                self._send_json_response(401, {"error": "Unauthorized"})
                 return
 
-            try:
-                post_body = self.rfile.read(content_length)
-                req_data = json.loads(post_body.decode("utf-8"))
-            except Exception as e:
-                self._send_json_response(400, {"status": "error", "error": f"Invalid JSON body: {e}"})
+            device_name = req_data.get("device")
+            method = req_data.get("method")
+            params = req_data.get("params")
+
+            result = service.control_device(device_name, method, params)
+            self._send_json_response(200, result)
+            return
+
+        # 3. Change PIN API
+        elif self.path == "/api/settings/pin":
+            token = self._get_auth_token()
+            if not service.auth_manager.validate_token(token):
+                self._send_json_response(401, {"error": "Unauthorized"})
                 return
 
+            cur = req_data.get("current_pin", "")
+            new_p = req_data.get("new_pin", "")
+            ok = service.auth_manager.change_pin(cur, new_p)
+            if ok:
+                self._send_json_response(200, {"success": True, "message": "PIN updated successfully"})
+            else:
+                self._send_json_response(400, {"success": False, "error": "Current PIN is incorrect or new PIN is too short"})
+            return
+
+        # 4. Matter Commissioning Endpoint
+        elif self.path in ["/matter/commission", "/commission", "/api/commission"]:
             code = req_data.get("code")
             if not code:
                 self._send_json_response(400, {
@@ -72,7 +159,6 @@ class CommissionRequestHandler(BaseHTTPRequestHandler):
             wifi_ssid = req_data.get("wifi_ssid")
             wifi_password = req_data.get("wifi_password")
 
-            service = self.server.service  # type: ignore
             result = service.commission_device(
                 code=code,
                 network_only=network_only,
@@ -82,19 +168,22 @@ class CommissionRequestHandler(BaseHTTPRequestHandler):
 
             status_code = 200 if result.get("status") == "success" else 400
             self._send_json_response(status_code, result)
+            return
+
         else:
             self._send_json_response(404, {"error": "Not Found", "path": self.path})
 
 
 class MatterCommissionService:
     """
-    Runs the lightweight local REST API on UNIQ Hub to commission Matter devices.
+    Runs the lightweight local REST API and Web Dashboard on UNIQ Hub.
     """
 
     def __init__(self, host: str = "0.0.0.0", port: int = 8282, matter_connector: Any = None):
         self.host = host
         self.port = port
         self.connector = matter_connector
+        self.auth_manager = HubAuthManager()
         self._server: Optional[HTTPServer] = None
         self._thread: Optional[threading.Thread] = None
         self._is_running = False
@@ -112,9 +201,9 @@ class MatterCommissionService:
                 name="MatterCommissionHttpServer"
             )
             self._thread.start()
-            log.info(f"Matter Commissioning REST API listening on http://{self.host}:{self.port}")
+            log.info(f"UNIQ Hub Local Web Dashboard & API listening on http://{self.host}:{self.port}")
         except Exception as e:
-            log.error(f"Failed to start Matter Commissioning HTTP Service: {e}")
+            log.error(f"Failed to start UNIQ Hub Local HTTP Service: {e}")
 
     def stop(self):
         self._is_running = False
@@ -124,7 +213,7 @@ class MatterCommissionService:
                 self._server.server_close()
             except Exception:
                 pass
-        log.info("Matter Commissioning REST API stopped.")
+        log.info("UNIQ Hub Local Web Dashboard stopped.")
 
     def get_status(self) -> dict:
         is_connected = False
@@ -144,8 +233,55 @@ class MatterCommissionService:
             "matterjs_server_url": server_url,
             "commissioned_devices_count": registered_count,
             "hub": "UNIQ Smart Home Hub",
-            "version": "1.0.0-prototype"
+            "version": "2.4.0-uniq",
+            "local_web_gui": f"http://{self.host}:{self.port}/"
         }
+
+    def get_live_devices(self) -> list:
+        if not self.connector or not hasattr(self.connector, "mapper"):
+            return []
+
+        devices = []
+        registry = self.connector.mapper._registry
+        for key, dev in registry.items():
+            device_name = dev.get("device_name")
+            is_bridged = dev.get("is_bridged", False)
+            node_id = dev.get("node_id")
+            endpoint_id = dev.get("endpoint_id")
+            dev_type = dev.get("device_type", "Smart Device")
+
+            # Check if device has OnOff capability
+            has_onoff = "Light" in dev_type or "Relay" in dev_type or "Socket" in dev_type or "Plug" in dev_type or "Switch" in dev_type
+
+            dev_info = {
+                "device_name": device_name,
+                "device_type": dev_type,
+                "node_id": node_id,
+                "endpoint_id": endpoint_id,
+                "vendor": dev.get("vendor_name", "Matter"),
+                "model": dev.get("product_name", ""),
+                "is_bridged": is_bridged,
+                "has_onoff": has_onoff,
+                "state": "OFF"
+            }
+            devices.append(dev_info)
+
+        return devices
+
+    def control_device(self, device_name: str, method: str, params: Any) -> dict:
+        if not self.connector:
+            return {"success": False, "error": "Connector not initialized"}
+
+        rpc_request = {
+            "device": device_name,
+            "data": {
+                "id": 1,
+                "method": method,
+                "params": params
+            }
+        }
+        res = self.connector.server_side_rpc_handler(rpc_request)
+        return res
 
     def commission_device(
         self,
@@ -166,7 +302,6 @@ class MatterCommissionService:
                 "error": "Cannot commission: UNIQ Hub is not currently connected to matterjs-server."
             }
 
-        # Dispatch commissioning command to matterjs-server
         resp = client.commission_with_code(
             code=code,
             network_only=network_only,
@@ -184,7 +319,6 @@ class MatterCommissionService:
         result_data = resp.get("result", {})
         node_id = result_data.get("node_id") if isinstance(result_data, dict) else None
 
-        # Trigger immediate sync in connector if node_id is returned
         if node_id and hasattr(self.connector, "sync_node_by_id"):
             self.connector.sync_node_by_id(int(node_id))
 
