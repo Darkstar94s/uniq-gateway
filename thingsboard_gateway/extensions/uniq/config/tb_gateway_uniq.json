@@ -49,12 +49,6 @@
   },
   "connectors": [
     {
-      "name": "UNIQ Zigbee Connector",
-      "type": "custom",
-      "class": "thingsboard_gateway.extensions.uniq.UniqZigbeeConnector",
-      "configuration": "uniq_zigbee.json"
-    },
-    {
       "name": "UNIQ Matter Connector",
       "type": "custom",
       "class": "thingsboard_gateway.extensions.uniq.UniqMatterConnector",
